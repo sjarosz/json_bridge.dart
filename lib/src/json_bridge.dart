@@ -1,10 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
+
 import 'package:path_provider/path_provider.dart';
 
-
 /// Enum to specify the directory where the file will be created.
-/// 
+///
 /// [applicationDocumentsDirectory] is the default directory.
 enum PreferDir {
   applicationDocumentsDirectory,
@@ -25,7 +26,7 @@ enum PreferDir {
 ///
 /// But you can also specify a directory and a file name when calling the init method.
 ///
-/// [JSONBridge] is a singleton
+/// This FORK of [JSONBridge] is NOT a singleton, rather leverages dependecy injection.
 ///
 /// [JSONBridge] support manipulating nested keys with dot as separator.
 ///
@@ -40,14 +41,78 @@ enum PreferDir {
 /// Use [JSONBridge] to track user activity and show him the last seen screen when he restart the app.
 ///
 /// Use cases are endless, use your imagination.
+///
+
+class DirectoryProvider {
+  Future<Directory?> getDirectory(
+      PreferDir preferDir, String? customDirPath) async {
+    switch (preferDir) {
+      case PreferDir.applicationDocumentsDirectory:
+        return await getApplicationDocumentsDirectory();
+      case PreferDir.applicationSupportDirectory:
+        return await getApplicationSupportDirectory();
+      case PreferDir.externalStorageDirectory:
+        return await getExternalStorageDirectory();
+      case PreferDir.libraryDirectory:
+        return await getLibraryDirectory();
+      case PreferDir.temporaryDirectory:
+        return await getTemporaryDirectory();
+      case PreferDir.customDirectory:
+        return Directory(customDirPath!);
+      default:
+        return await getApplicationDocumentsDirectory();
+    }
+  }
+}
+
 class JSONBridge {
-  late File _file;
+  File _file;
+  bool _isInitialized = false;
 
-  JSONBridge._privateConstructor();
-  static final JSONBridge _instance = JSONBridge._privateConstructor();
+  JSONBridge(this._file);
 
-  factory JSONBridge() {
-    return _instance;
+  static Future<JSONBridge> create(
+      {String fileName = 'json_bridge_data.json',
+      String? dir,
+      PreferDir preferDir = PreferDir.applicationDocumentsDirectory,
+      DirectoryProvider? directoryProvider}) async {
+    directoryProvider ??= DirectoryProvider();
+
+    Directory? directory;
+    if (Platform.isAndroid || Platform.isIOS) {
+      directory = await directoryProvider.getDirectory(preferDir, dir);
+      if (directory == null) {
+        throw Exception('JSONBridge: Directory cannot be null');
+      }
+    } else if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
+      directory = dir != null
+          ? Directory(dir)
+          : await directoryProvider.getDirectory(preferDir, null);
+
+      // Handle desktop platforms here if necessary
+    } else if (kIsWeb) {
+      // Handle web (Chrome) specific logic here
+      // Note: Filesystem operations are not supported in the same way on web
+      // You might need to use browser-based storage solutions like LocalStorage or IndexedDB
+    }
+
+    if (!kIsWeb) {
+      final filePath = '${directory!.path}/$fileName';
+      final file = File(filePath);
+      if (!file.existsSync()) {
+        file.createSync(recursive: true);
+      }
+      return JSONBridge(file);
+    } else {
+      // Handle the web case differently
+      // Example: You may want to create a web-specific file handler
+      throw UnimplementedError(
+          'JSONBridge is not implemented for web platforms.');
+    }
+  }
+
+  void init() {
+    _isInitialized = true;
   }
 
   /// Creates a JSON file in the application document directory or in the one provided.
@@ -65,54 +130,12 @@ class JSONBridge {
   ///Please refer to your target platform documentation for how to set permissions to access external directories.
   ///
   ///
-  void init(
-      {String fileName = 'json_bridge_data.json',
-      String? dir,
-      PreferDir preferDir = PreferDir.applicationDocumentsDirectory}) async {
-    // Ensure fileName is not empty
-    if (fileName.isEmpty) {
-      throw Exception('JSONBridge: File name cannot be empty');
-    }
+  ///
 
-    // If the file name contains already .json, don't add it again
-    if (!fileName.endsWith('.json')) {
-      fileName += '.json';
-    }
-
-    Directory? directory;
-    switch (preferDir) {
-      case PreferDir.applicationDocumentsDirectory:
-        directory = await getApplicationDocumentsDirectory();
-        break;
-      case PreferDir.applicationSupportDirectory:
-        directory = await getApplicationSupportDirectory();
-        break;
-      case PreferDir.externalStorageDirectory:
-        directory = await getExternalStorageDirectory();
-        break;
-      case PreferDir.libraryDirectory:
-        directory = await getLibraryDirectory();
-        break;
-      case PreferDir.temporaryDirectory:
-        directory = await getTemporaryDirectory();
-        break;
-      case PreferDir.customDirectory:
-        directory = Directory(dir!);
-        break;
-      default:
-        directory = await getApplicationDocumentsDirectory();
-    }
-
-    if (directory == null) {
-      throw Exception('JSONBridge: Directory cannot be null');
-    }
-
-    // File object
-    _file = File('${directory.path}/$fileName');
-
-    // Create the file if it doesn't exist
-    if (!_file.existsSync()) {
-      _file.createSync();
+  void _checkInitialization() {
+    if (!_isInitialized) {
+      throw Exception(
+          'JSONBridge: Instance not initialized. Call init() before using.');
     }
   }
 
@@ -120,6 +143,8 @@ class JSONBridge {
   /// If the file is empty, an empty Map is returned.
   ///
   Map<String, dynamic> read() {
+    _checkInitialization();
+
     if (_file.existsSync()) {
       String contents = _file.readAsStringSync();
       return contents.isNotEmpty ? json.decode(contents) : {};
